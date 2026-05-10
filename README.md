@@ -1,16 +1,19 @@
 # iPlanet Demand Planner
 
-iPlanet Demand Planner is a Streamlit-based demand forecasting and inventory planning app for iPlanet retail sales data. The project trains an AutoML-style model tournament on historical sales, saves the winning model artifacts, and uses them in an interactive dashboard for product-level forecasts, safety stock, reorder points, holiday context, and downloadable reports.
+iPlanet Demand Planner is a Streamlit demand forecasting and inventory planning app for iPlanet retail sales data. It supports role-based login, an admin settings workspace, model retraining from uploaded sales workbooks, product-level forecasts, safety stock/reorder guidance, holiday context, and CSV exports.
 
-## What This App Does
+## What The App Does
 
+- Authenticates users from `data/users.json`
+- Supports `Admin` and `Store Operator` roles
+- Shows Store Operators only the prediction workflow
+- Lets Admin users access Prediction, Model Training, and Settings
 - Trains demand models from `data/sales_data.xlsx`
 - Builds weekly product-store-region demand features from transaction data
-- Adds lag, rolling, seasonal, discount, EMI/cashback, and Indian holiday features
+- Adds lag, rolling, seasonal, discount, EMI/cashback, funded scheme, and Indian holiday features
 - Selects the best model from XGBoost, Random Forest, and HistGradientBoosting variants
 - Saves model and encoder artifacts under `models/`
-- Runs a Streamlit dashboard for historical trend review and inventory planning
-- Provides a separate Streamlit model-training workspace for uploading a new `sales_data.xlsx`
+- Runs product-level forecasts with safety stock, reorder point, and procurement guidance
 - Exports individual product forecasts and bulk store forecasts as CSV files
 
 ## Project Structure
@@ -22,7 +25,9 @@ iPlanet_stock_prediction_app/
 |-- test_genai.py
 |-- data/
 |   |-- sales_data.xlsx
-|   `-- inventory_master_data.xlsx
+|   |-- inventory_master_data.xlsx
+|   |-- users.json
+|   `-- training_uploads/
 |-- logs/
 |   `-- app.log
 |-- models/
@@ -32,7 +37,8 @@ iPlanet_stock_prediction_app/
 |   |-- le_store.pkl
 |   |-- le_prod.pkl
 |   |-- le_product_store.pkl
-|   `-- le_month_product.pkl
+|   |-- le_month_product.pkl
+|   `-- _training_latest/
 `-- src/
     |-- streamlit_app.py
     |-- training_pipeline.py
@@ -49,14 +55,45 @@ iPlanet_stock_prediction_app/
 
 | File | Purpose |
 | --- | --- |
-| `src/streamlit_app.py` | Streamlit UI for selecting region, store, product, forecast date, horizon, lead time, and growth margin. |
-| `src/training_pipeline.py` | Loads sales data, validates required columns, engineers features, trains multiple models, evaluates them, and writes model artifacts. |
-| `src/report_engine.py` | Anchors forecasts to recent historical sales and creates individual or bulk CSV reports. |
-| `src/data_engine.py` | Utility functions for dropdown data and weekly inference data preparation. |
-| `src/external_features.py` | Adds Indian holiday features and optional external feature files if present. |
-| `src/genai_layer.py` | Placeholder for GenAI functions. It is currently empty, so AI insight imports fall back gracefully. |
+| `src/streamlit_app.py` | Main Streamlit app, login flow, role-based workspaces, prediction controls, training UI, Settings/User Management UI, and dashboard rendering. |
+| `src/training_pipeline.py` | Validates sales data, engineers features, runs the model tournament, evaluates models, and writes model artifacts. |
+| `src/report_engine.py` | Anchors forecasts to recent historical sales and creates individual and bulk CSV reports. |
+| `src/data_engine.py` | Utility functions for data preparation. |
+| `src/external_features.py` | Adds Indian holiday features and optional external feature files when available. |
+| `src/genai_layer.py` | Placeholder for future GenAI functions. It is currently empty, so GenAI imports fall back gracefully. |
 | `test_genai.py` | Smoke test script intended for future GenAI integration. |
-| `src/utils/logger.py` | Simple timestamped console logger used by the training pipeline. |
+| `src/utils/logger.py` | Simple timestamped console logger used by training. |
+
+## Login And Roles
+
+User records are stored in `data/users.json`.
+
+Default admin login:
+
+- User: `admin`
+- Password: `admin123`
+
+Roles:
+
+- `Admin`: can access Prediction, Model Training, and Settings.
+- `Store Operator`: can access only the Prediction screen. The workspace selector is hidden for this role because there is only one available workspace.
+
+The login screen includes a short transition screen with the message `Taking you to iPlanet software hub...`.
+
+## Settings / User Management
+
+Admin users can open `Settings` from the top workspace selector.
+
+The Settings screen supports:
+
+- Creating users
+- Assigning `Admin` or `Store Operator`
+- Enforcing unique usernames
+- Showing users in a table-style summary
+- Changing a user's password from the row-level password reset icon
+- Tracking `Last Password Change`
+
+Passwords are stored as SHA-256 hashes in `data/users.json`.
 
 ## Data Inputs
 
@@ -64,7 +101,7 @@ Required:
 
 - `data/sales_data.xlsx`
 
-Currently used columns include:
+Required training columns:
 
 - `RegionName`
 - `StoreName`
@@ -73,6 +110,9 @@ Currently used columns include:
 - `Quantity`
 - `MRP`
 - `ProductLevelDiscAmount`
+
+Optional columns used when present:
+
 - `True Demand`
 - `Bank Funded NoCost EMI Applied With BankName`
 - `Bank Funded Cashback Coverted To Percentage With BankName`
@@ -80,7 +120,7 @@ Currently used columns include:
 
 Also present:
 
-- `data/inventory_master_data.xlsx`, with product metadata columns such as `AlternateProductCodes`, `ProductName`, `BusinessSegmentName`, `Class`, `SubClass`, and `ProductCategoryName`.
+- `data/inventory_master_data.xlsx`
 
 Optional external feature files supported by `src/external_features.py`:
 
@@ -110,51 +150,84 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+Run the app:
+
+```powershell
+streamlit run src\streamlit_app.py
+```
+
+Run commands from the project root so relative paths like `data/sales_data.xlsx` and `models/master_model.pkl` resolve correctly.
+
+## Prediction Workflow
+
+After login, use the sidebar Prediction Controls:
+
+- Region
+- Store
+- Product
+- Forecast Start Date (Historical)
+- Planning Horizon: 7, 30, or 60 days
+- Supplier Lead Time: 7, 30, or 60 days
+- Growth Margin percentage
+
+Click `Run Intelligence Report` to generate the dashboard.
+
+The dashboard includes:
+
+- Historical sales trend
+- Demand forecast chart
+- Demand total
+- Safety stock
+- Reorder point
+- Daily velocity
+- Procurement recommendation
+- Technical scorecard
+- Holiday calendar
+- Individual product CSV download
+- Bulk store CSV download
+- GenAI tab placeholder, disabled until `src/genai_layer.py` is implemented
+
 ## Train Or Refresh The Model
 
 There are two supported training flows.
 
 ### Train From The Streamlit UI
 
-Start the app:
-
-```powershell
-streamlit run src\streamlit_app.py
-```
-
-In the sidebar, switch `Workspace` to `Model Training`.
+Login as an Admin and switch the top workspace selector to `Training`.
 
 The training workspace lets you:
 
-- Upload a workbook named `sales_data.xlsx`
-- Validate the required training columns
+- Upload a sales workbook
+- Validate required columns
+- Review row, duplicate, date gap, and anomaly summaries
+- Choose a retraining strategy:
+  - Full retrain
+  - Rolling window using the latest 2-3 years
 - Click `Train Model`
-- Train the model tournament on the uploaded file
-- Stage generated `.pkl` files in `models/_training_latest/`
-- Promote the staged artifacts to `models/` only after training succeeds
+- Stage generated artifacts in `models/_training_latest/`
+- Promote staged artifacts to `models/` only after training succeeds
 - Replace the active `data/sales_data.xlsx` with the uploaded training file
-- Clear Streamlit caches so the prediction dashboard can load the new model
-
-After training completes, switch `Workspace` back to `Prediction Dashboard` and run predictions with the newly active model artifacts.
+- Clear Streamlit caches so predictions use the refreshed model
 
 Uploaded training files are retained under `data/training_uploads/` with timestamps.
 
 ### Train From The Command Line
 
-Run the training pipeline from the project root:
+Run from the project root:
 
 ```powershell
 python src\training_pipeline.py
 ```
 
-This pipeline:
+The pipeline:
 
 1. Loads `data/sales_data.xlsx`
-2. Aggregates transactions into weekly product-store-region demand
-3. Builds enhanced time-series, seasonal, holiday, pricing, and promotion features
-4. Trains an AutoML-style model tournament
-5. Selects the lowest-MAE model
-6. Saves the winning model and label encoders to `models/`
+2. Validates required columns
+3. Aggregates transactions into weekly product-store-region demand
+4. Builds enhanced time-series, seasonal, holiday, pricing, and promotion features
+5. Trains a model tournament
+6. Selects the lowest-MAE model
+7. Saves the winning model, label encoders, and metrics to `models/`
 
 Current saved metrics in `models/model_metrics.pkl`:
 
@@ -165,55 +238,19 @@ Current saved metrics in `models/model_metrics.pkl`:
 - sMAPE: `83.45%`
 - Features Used: `48`
 
-## Run The Dashboard
+## Model Artifacts
 
-Start Streamlit from the project root:
+The active prediction workflow expects these files in `models/`:
 
-```powershell
-streamlit run src\streamlit_app.py
-```
+- `master_model.pkl`
+- `model_metrics.pkl`
+- `le_region.pkl`
+- `le_store.pkl`
+- `le_prod.pkl`
+- `le_product_store.pkl`
+- `le_month_product.pkl`
 
-The sidebar lets you choose:
-
-- Region
-- Store
-- Product
-- Historical forecast start date
-- Planning horizon: 7, 30, or 60 days
-- Supplier lead time: 7, 30, or 60 days
-- Growth margin percentage
-
-Click `Run Intelligence Report` to generate the dashboard.
-
-## Dashboard Views
-
-The dashboard includes four tabs:
-
-- `Historical Trend`: monthly historical sales trend for the selected product and store.
-- `Demand Forecast & Strategy`: weekly forecast chart, demand total, safety stock, reorder point, daily velocity, procurement recommendation, technical scorecard, and holiday calendar.
-- `Reports`: downloadable individual product forecast CSV and bulk store forecast CSV.
-- `AI Insights`: reserved for GenAI-powered explanations and recommendations when `src/genai_layer.py` is implemented.
-
-## Forecasting Workflow
-
-```text
-data/sales_data.xlsx
-        |
-        v
-src/training_pipeline.py
-        |
-        v
-models/master_model.pkl + label encoders + metrics
-        |
-        v
-src/streamlit_app.py
-        |
-        +--> src/report_engine.py
-        +--> src/external_features.py
-        |
-        v
-Streamlit dashboard + CSV exports
-```
+Training first writes new artifacts to `models/_training_latest/` and promotes them only after all required artifacts exist.
 
 ## Feature Engineering
 
@@ -241,11 +278,13 @@ The dashboard calculates:
 
 ## GenAI Status
 
-`src/streamlit_app.py`, `src/report_engine.py`, and `test_genai.py` are wired for a future GenAI layer, but `src/genai_layer.py` is currently empty. Because of that:
+The app and report engine contain hooks for future GenAI-powered explanations and recommendations, but `src/genai_layer.py` is currently empty.
 
-- The dashboard will show limited AI insight availability.
-- `test_genai.py` is expected to fail the GenAI import checks until the functions are implemented.
-- Setting `OPENAI_API_KEY` alone is not enough until `src/genai_layer.py` contains the required functions.
+Until those functions are implemented:
+
+- The app falls back gracefully.
+- The AI insights area may show disabled or limited availability messaging.
+- `OPENAI_API_KEY` alone is not enough to enable GenAI features.
 
 Expected future functions include:
 
@@ -260,7 +299,8 @@ Expected future functions include:
 
 ## Notes
 
-- Run commands from the project root so relative paths like `data/sales_data.xlsx` and `models/master_model.pkl` resolve correctly.
-- The checked-in `venv/` directory is not needed if you create your own virtual environment.
-- `logs/app.log` exists, but the active logger currently prints timestamped messages to the console.
-- Some app labels in the Python files contain mojibake characters from encoding issues; this README uses plain ASCII for readability.
+- Streamlit's default cache spinner is disabled for metadata loading so the app uses its own progress messaging.
+- The top-right Streamlit toolbar/menu is hidden by app CSS for a cleaner operator experience.
+- The checked-in `venv/` directory is not required if you create your own virtual environment.
+- `logs/app.log` exists, but active training logs are primarily emitted to the console/status UI.
+- Some Python labels contain mojibake characters from earlier encoding issues; this README uses plain ASCII for readability.

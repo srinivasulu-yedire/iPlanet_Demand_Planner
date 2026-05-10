@@ -7,6 +7,9 @@ import shutil
 import numpy as np
 import io
 import altair as alt
+import json
+import hashlib
+import time
 
 try:
     from training_pipeline import MODEL_ARTIFACTS, validate_sales_data_columns, run_master_tournament
@@ -51,6 +54,10 @@ st.markdown(
     section[data-testid="stSidebar"] .block-container {
         padding-top: 1.5rem;
     }
+    [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer {
+        visibility: hidden;
+        height: 0;
+    }
     .app-brand {
         border: 1px solid rgba(49, 51, 63, 0.16);
         border-radius: 10px;
@@ -85,6 +92,93 @@ st.markdown(
         text-transform: uppercase;
         margin-bottom: 0.2rem;
     }
+    .top-workspace {
+        color: #64748b;
+        font-size: 0.86rem;
+        line-height: 2.4rem;
+        white-space: nowrap;
+    }
+    .top-workspace-label {
+        color: #64748b;
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 2.4rem;
+        text-align: center;
+        white-space: nowrap;
+    }
+    .signin-shell {
+        min-height: calc(100vh - 7rem);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem 0;
+    }
+    .signin-card {
+        width: min(380px, 92vw);
+        padding: 1.5rem 1.6rem;
+        border: 1px solid rgba(255, 255, 255, 0.52);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 22px 70px rgba(15, 23, 42, 0.24);
+        backdrop-filter: blur(10px);
+    }
+    .signin-bg {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background:
+            linear-gradient(90deg, rgba(15, 23, 42, 0.48), rgba(15, 23, 42, 0.10)),
+            linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.18)),
+            radial-gradient(circle at 78% 24%, rgba(255, 255, 255, 0.62) 0 3%, transparent 4%),
+            linear-gradient(90deg, transparent 0 10%, rgba(255,255,255,0.62) 10% 12%, transparent 12% 22%, rgba(255,255,255,0.52) 22% 24%, transparent 24% 34%, rgba(255,255,255,0.58) 34% 36%, transparent 36% 100%),
+            linear-gradient(180deg, #243447 0 18%, #eef2f7 18% 21%, #9fb4c7 21% 56%, #e5e7eb 56% 59%, #1f2937 59% 100%);
+        background-size: cover;
+    }
+    .loading-card {
+        width: min(430px, 92vw);
+        margin: 28vh auto 0;
+        padding: 1.4rem 1.6rem;
+        border: 1px solid rgba(49, 51, 63, 0.12);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 18px 58px rgba(15, 23, 42, 0.18);
+        text-align: center;
+    }
+    .loading-spinner {
+        width: 34px;
+        height: 34px;
+        margin: 0 auto 0.85rem;
+        border: 4px solid rgba(47, 133, 90, 0.18);
+        border-top-color: #2f855a;
+        border-radius: 50%;
+        animation: loading-spin 0.9s linear infinite;
+    }
+    @keyframes loading-spin {
+        to { transform: rotate(360deg); }
+    }
+    .user-row-header {
+        color: #64748b;
+        font-size: 0.82rem;
+        font-weight: 700;
+        padding: 0.45rem 0.25rem;
+    }
+    .user-table {
+        border: 1px solid rgba(49, 51, 63, 0.14);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-top: 0.5rem;
+    }
+    .user-table-header {
+        background: #f8fafc;
+        border-bottom: 1px solid rgba(49, 51, 63, 0.14);
+    }
+    .user-table-row {
+        border-bottom: 1px solid rgba(49, 51, 63, 0.10);
+        padding: 0.2rem 0;
+    }
+    .user-table-row:last-child {
+        border-bottom: none;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -95,48 +189,394 @@ DATA_PATH = 'data/sales_data.xlsx'
 MODEL_DIR = 'models'
 TRAINING_UPLOAD_DIR = os.path.join('data', 'training_uploads')
 STAGED_MODEL_DIR = os.path.join(MODEL_DIR, '_training_latest')
+USER_STORE_PATH = os.path.join('data', 'users.json')
+SALES_REQUIRED_COLUMNS = [
+    'RegionName', 'StoreName', 'ProductName', 'BillDate',
+    'Quantity', 'MRP', 'ProductLevelDiscAmount'
+]
+ROLES = ["Admin", "Store Operator"]
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "admin123"
 
 
-def render_workspace_selector():
-    st.sidebar.markdown(
+def _hash_password(password):
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def _default_users():
+    return {
+        DEFAULT_ADMIN_USERNAME: {
+            "username": DEFAULT_ADMIN_USERNAME,
+            "display_name": "Administrator",
+            "role": "Admin",
+            "password_hash": _hash_password(DEFAULT_ADMIN_PASSWORD),
+            "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+    }
+
+
+def load_users():
+    os.makedirs(os.path.dirname(USER_STORE_PATH), exist_ok=True)
+    if not os.path.exists(USER_STORE_PATH):
+        users = _default_users()
+        save_users(users)
+        return users
+
+    try:
+        with open(USER_STORE_PATH, "r", encoding="utf-8") as user_file:
+            users = json.load(user_file)
+    except (json.JSONDecodeError, OSError):
+        users = {}
+
+    if DEFAULT_ADMIN_USERNAME not in users:
+        users.update(_default_users())
+        save_users(users)
+    return users
+
+
+def save_users(users):
+    os.makedirs(os.path.dirname(USER_STORE_PATH), exist_ok=True)
+    with open(USER_STORE_PATH, "w", encoding="utf-8") as user_file:
+        json.dump(users, user_file, indent=2)
+
+
+def authenticate_user(username, password):
+    users = load_users()
+    user = users.get(username.strip().lower())
+    if not user:
+        return None
+    if user.get("password_hash") != _hash_password(password):
+        return None
+    return user
+
+
+def render_login_transition():
+    st.markdown('<div class="signin-bg"></div>', unsafe_allow_html=True)
+    st.markdown(
         """
-        <div class="app-brand">
-            <div class="app-brand-title">iPlanet Demand Planner</div>
-            <div class="app-brand-subtitle">Forecasting, inventory planning, and model refresh</div>
+        <div class="loading-card">
+            <div class="loading-spinner"></div>
+            <div style="font-size: 1.15rem; font-weight: 750; color: #1f2937;">Taking you to iPlanet software hub...</div>
+            <div style="font-size: 0.86rem; color: #64748b; margin-top: 0.35rem;">Please wait while your workspace loads.</div>
         </div>
         """,
         unsafe_allow_html=True
     )
-    st.sidebar.markdown('<div class="section-kicker">Workspace</div>', unsafe_allow_html=True)
-    options = ["Prediction Dashboard", "Model Training"]
+    time.sleep(0.8)
+    st.session_state.login_transition = False
+    st.rerun()
+
+
+def require_login():
+    if "authenticated_user" in st.session_state:
+        if st.session_state.get("login_transition"):
+            render_login_transition()
+        return st.session_state.authenticated_user
+
+    login_placeholder = st.empty()
+    with login_placeholder.container():
+        st.markdown('<div class="signin-bg"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="height: 12vh;"></div>', unsafe_allow_html=True)
+        _, login_col, _ = st.columns([1, 0.72, 1])
+        with login_col:
+            st.title("iPlanet Demand Planner")
+            st.caption("Sign in to access forecasting and operations workspaces.")
+
+            with st.form("login_form"):
+                username = st.text_input("User", width=280)
+                password = st.text_input("Password", type="password", width=280)
+                submitted = st.form_submit_button("Sign In", type="primary")
+
+            if submitted:
+                user = authenticate_user(username, password)
+                if user:
+                    st.session_state.authenticated_user = user
+                    st.session_state.report_generated = False
+                    st.session_state.login_transition = True
+                    st.rerun()
+                st.error("Invalid username or password.")
+
+            st.info("Default admin login: username `admin`, password `admin123`.")
+    st.stop()
+
+
+@st.dialog("Change Password")
+def render_change_password_dialog(selected_username):
+    users = load_users()
+    user = users.get(selected_username)
+    if not user:
+        st.error("User was not found.")
+        return
+
+    st.caption(f"User: {user.get('display_name', selected_username)} ({selected_username})")
+    with st.form(f"change_password_form_{selected_username}", clear_on_submit=True):
+        new_password = st.text_input("New Password", type="password", width=280)
+        confirm_password = st.text_input("Confirm Password", type="password", width=280)
+        password_submitted = st.form_submit_button("Submit", type="primary", width=120)
+
+    if password_submitted:
+        if not new_password:
+            st.error("New password is required.")
+        elif new_password != confirm_password:
+            st.error("Password confirmation does not match.")
+        else:
+            users[selected_username]["password_hash"] = _hash_password(new_password)
+            users[selected_username]["updated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+            users[selected_username]["password_changed_at"] = users[selected_username]["updated_at"]
+            save_users(users)
+            if st.session_state.authenticated_user.get("username") == selected_username:
+                st.session_state.authenticated_user = users[selected_username]
+            st.success("Password changed.")
+            st.rerun()
+
+
+def render_user_management():
+    st.title("User Management")
+    st.caption("Create users, assign access roles, and reset passwords.")
+
+    users = load_users()
+    with st.form("create_user_form", clear_on_submit=True):
+        col_a, col_b, col_c, col_d = st.columns([0.22, 0.22, 0.22, 0.34])
+        with col_a:
+            username = st.text_input("User", width=220)
+        with col_b:
+            display_name = st.text_input("Display Name", width=220)
+        with col_c:
+            role = st.selectbox("Role", ROLES, width=220)
+        with col_d:
+            password = st.text_input("Temporary Password", type="password", width=220)
+            submitted = st.form_submit_button("Save User", type="primary")
+
+    if submitted:
+        normalized_username = username.strip().lower()
+        if not normalized_username or not password:
+            st.error("Username and password are required.")
+        elif normalized_username in users:
+            st.error(f"User `{normalized_username}` already exists. Choose a unique username.")
+        else:
+            now = datetime.datetime.now().isoformat(timespec="seconds")
+            users[normalized_username] = {
+                "username": normalized_username,
+                "display_name": display_name.strip() or normalized_username,
+                "role": role,
+                "password_hash": _hash_password(password),
+                "created_at": now,
+                "updated_at": now,
+                "password_changed_at": now,
+            }
+            save_users(users)
+            st.success(f"Saved user `{normalized_username}` as {role}.")
+
+    rows = [
+        {
+            "Username": user.get("username", username),
+            "Display Name": user.get("display_name", ""),
+            "Role": user.get("role", "Store Operator"),
+            "Created": user.get("created_at", ""),
+            "Last Password Change": user.get("password_changed_at", user.get("updated_at", "")),
+        }
+        for username, user in sorted(load_users().items(), key=lambda item: item[0])
+    ]
+    st.subheader("Users")
+    if not rows:
+        st.info("No users found.")
+        return
+
+    st.markdown('<div class="user-table">', unsafe_allow_html=True)
+    st.markdown('<div class="user-table-header">', unsafe_allow_html=True)
+    header_cols = st.columns([1.1, 1.5, 1.1, 1.5, 1.7, 0.55])
+    for col, label in zip(header_cols, ["User", "Display Name", "Role", "Created", "Last Password Change", ""]):
+        col.markdown(f'<div class="user-row-header">{label}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    for row in rows:
+        st.markdown('<div class="user-table-row">', unsafe_allow_html=True)
+        row_cols = st.columns([1.1, 1.5, 1.1, 1.5, 1.7, 0.55], vertical_alignment="center")
+        row_cols[0].write(row["Username"])
+        row_cols[1].write(row["Display Name"])
+        row_cols[2].write(row["Role"])
+        row_cols[3].write(row["Created"])
+        row_cols[4].write(row["Last Password Change"])
+        if row_cols[5].button(
+            "",
+            key=f"password_{row['Username']}",
+            help=f"Change password for {row['Username']}",
+            icon=":material/lock_reset:",
+            width=44
+        ):
+            render_change_password_dialog(row["Username"])
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _format_date(value):
+    if pd.isna(value):
+        return "Not available"
+    return pd.to_datetime(value).strftime("%d %b %Y")
+
+
+def build_upload_summary(uploaded_df):
+    summary_df = uploaded_df.copy()
+    original_rows = len(summary_df)
+    duplicate_rows = int(summary_df.duplicated().sum())
+    summary_df = summary_df.drop_duplicates().copy()
+
+    summary_df['BillDate'] = pd.to_datetime(summary_df['BillDate'], errors='coerce')
+    valid_dates = summary_df['BillDate'].dropna()
+    date_min = valid_dates.min() if not valid_dates.empty else pd.NaT
+    date_max = valid_dates.max() if not valid_dates.empty else pd.NaT
+
+    uploaded_compare = summary_df[SALES_REQUIRED_COLUMNS].copy()
+    uploaded_compare['BillDate'] = pd.to_datetime(uploaded_compare['BillDate'], errors='coerce')
+    uploaded_compare = uploaded_compare.drop_duplicates()
+    rows_added = len(uploaded_compare)
+    if os.path.exists(DATA_PATH):
+        try:
+            active_compare = pd.read_excel(DATA_PATH, usecols=SALES_REQUIRED_COLUMNS, engine='openpyxl')
+            active_compare['BillDate'] = pd.to_datetime(active_compare['BillDate'], errors='coerce')
+            active_compare = active_compare.drop_duplicates()
+            rows_added = len(
+                uploaded_compare.merge(
+                    active_compare,
+                    how='left',
+                    indicator=True
+                ).query("_merge == 'left_only'")
+            )
+        except Exception:
+            rows_added = len(uploaded_compare)
+
+    rows_after_dedupe = len(summary_df)
+
+    missing_dates = []
+    anomaly_rows = []
+    if not valid_dates.empty:
+        valid_sales = summary_df.dropna(subset=['BillDate']).copy()
+        valid_sales['Quantity'] = pd.to_numeric(valid_sales['Quantity'], errors='coerce').fillna(0)
+        daily_quantity = (
+            valid_sales
+            .groupby(valid_sales['BillDate'].dt.normalize())['Quantity']
+            .sum()
+            .sort_index()
+        )
+        all_dates = pd.date_range(date_min.normalize(), date_max.normalize(), freq='D')
+        missing_dates = [date for date in all_dates.difference(daily_quantity.index)]
+
+        daily_change = daily_quantity.diff()
+        previous_quantity = daily_quantity.shift(1)
+        pct_change = daily_quantity.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+        change_threshold = max(daily_change.abs().quantile(0.90), daily_quantity.mean() * 0.50, 1)
+        anomaly_mask = (daily_change.abs() >= change_threshold) & (pct_change.abs() >= 0.50)
+        anomaly_rows = [
+            {
+                "Date": index.strftime("%d %b %Y"),
+                "Type": "Spike" if daily_change.loc[index] > 0 else "Drop",
+                "Quantity": int(daily_quantity.loc[index]),
+                "Previous": int(previous_quantity.loc[index]) if not pd.isna(previous_quantity.loc[index]) else 0,
+                "Change": int(daily_change.loc[index]) if not pd.isna(daily_change.loc[index]) else 0,
+            }
+            for index in daily_quantity.index[anomaly_mask]
+        ]
+
+    return {
+        "data": summary_df,
+        "original_rows": original_rows,
+        "rows_after_dedupe": rows_after_dedupe,
+        "rows_added": rows_added,
+        "duplicates_removed": duplicate_rows,
+        "date_min": date_min,
+        "date_max": date_max,
+        "missing_dates": missing_dates,
+        "anomalies": anomaly_rows,
+    }
+
+
+def apply_retraining_strategy(upload_summary, strategy):
+    training_df = upload_summary["data"].copy()
+    cutoff_date = None
+    if strategy == "Rolling window (last 2-3 years)" and not pd.isna(upload_summary["date_max"]):
+        cutoff_date = upload_summary["date_max"] - pd.DateOffset(years=3)
+        training_df = training_df[training_df['BillDate'] >= cutoff_date].copy()
+    return training_df, cutoff_date
+
+
+def calculate_safety_stock(history_df, forecast_values, horizon_days, lead_time_days, service_factor=1.65):
+    avg_daily_forecast = sum(forecast_values) / horizon_days if horizon_days else 0
+    fallback_sigma = avg_daily_forecast * 0.15
+
+    if history_df.empty:
+        return round(service_factor * fallback_sigma * np.sqrt(lead_time_days)), fallback_sigma
+
+    history = history_df.copy()
+    history['BillDate'] = pd.to_datetime(history['BillDate'], errors='coerce')
+    history['Quantity'] = pd.to_numeric(history['Quantity'], errors='coerce').fillna(0)
+    history = history.dropna(subset=['BillDate']).sort_values('BillDate')
+    if history.empty:
+        return round(service_factor * fallback_sigma * np.sqrt(lead_time_days)), fallback_sigma
+
+    max_history_date = history['BillDate'].max()
+    recent_start = max_history_date - pd.Timedelta(days=180)
+    recent_history = history[history['BillDate'] >= recent_start]
+    daily_quantity = recent_history.set_index('BillDate').resample('D')['Quantity'].sum()
+    historical_sigma = float(daily_quantity.std(ddof=0)) if len(daily_quantity) > 1 else 0.0
+    sigma = max(historical_sigma, fallback_sigma)
+
+    return round(service_factor * sigma * np.sqrt(lead_time_days)), sigma
+
+
+def render_workspace_selector(current_user):
+    st.sidebar.markdown(
+        """
+        <div class="app-brand">
+            <div class="app-brand-title">iPlanet Demand Planner</div>
+            <div class="app-brand-subtitle">Demand planning</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    shell_cols = st.columns([0.34, 0.10, 0.30, 0.17, 0.09], vertical_alignment="center")
+    shell_cols[3].markdown(
+        f"<div class=\"top-workspace\">Signed in as {current_user.get('display_name', current_user['username'])} | {current_user['role']}</div>",
+        unsafe_allow_html=True
+    )
+    if shell_cols[4].button("Sign Out", width=96):
+        st.session_state.pop("authenticated_user", None)
+        st.session_state.pop("login_transition", None)
+        st.session_state.report_generated = False
+        st.rerun()
+
+    options = ["Prediction Dashboard"]
+    if current_user["role"] == "Admin":
+        options.extend(["Model Training", "User Management"])
+    else:
+        return "Prediction Dashboard"
+
     labels = {
         "Prediction Dashboard": "Prediction",
-        "Model Training": "Training"
+        "Model Training": "Training",
+        "User Management": "Settings"
     }
     if hasattr(st.sidebar, "segmented_control"):
-        selected_workspace = st.sidebar.segmented_control(
+        shell_cols[1].markdown('<div class="top-workspace-label">Workspace</div>', unsafe_allow_html=True)
+        selected_workspace = shell_cols[2].segmented_control(
             "Workspace",
             options,
             default="Prediction Dashboard",
             format_func=lambda option: labels[option],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="workspace_selector"
         )
     else:
-        selected_workspace = st.sidebar.radio(
+        shell_cols[1].markdown('<div class="top-workspace-label">Workspace</div>', unsafe_allow_html=True)
+        selected_workspace = shell_cols[2].radio(
             "Workspace",
             options,
             format_func=lambda option: labels[option],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            horizontal=True,
+            key="workspace_selector"
         )
 
-    help_text = {
-        "Prediction Dashboard": "Use the active trained model to forecast product demand and export reports.",
-        "Model Training": "Upload fresh sales data, train a new model, and promote it after a successful run."
-    }
-    st.sidebar.markdown(
-        f'<div class="workspace-help">{help_text[selected_workspace]}</div>',
-        unsafe_allow_html=True
-    )
     return selected_workspace
 
 
@@ -194,13 +634,10 @@ def render_training_workspace():
         upload_panel.warning("Recommended filename is `sales_data.xlsx`. The uploaded file will still be validated before training.")
 
     try:
-        preview_columns = pd.read_excel(uploaded_file, nrows=0, engine='openpyxl').columns.tolist()
+        uploaded_sales_df = pd.read_excel(uploaded_file, engine='openpyxl')
         uploaded_file.seek(0)
-        required_columns = [
-            'RegionName', 'StoreName', 'ProductName', 'BillDate',
-            'Quantity', 'MRP', 'ProductLevelDiscAmount'
-        ]
-        missing_columns = [column for column in required_columns if column not in preview_columns]
+        preview_columns = uploaded_sales_df.columns.tolist()
+        missing_columns = [column for column in SALES_REQUIRED_COLUMNS if column not in preview_columns]
         if missing_columns:
             upload_panel.error(f"Cannot train yet. Missing required columns: {', '.join(missing_columns)}")
             return
@@ -208,6 +645,49 @@ def render_training_workspace():
     except Exception as e:
         upload_panel.error(f"Could not read uploaded workbook: {e}")
         return
+
+    upload_summary = build_upload_summary(uploaded_sales_df)
+    upload_panel.subheader("Upload Summary")
+    metric_a, metric_b, metric_c = upload_panel.columns(3)
+    metric_a.metric("Rows added", f"{upload_summary['rows_added']:,}")
+    metric_b.metric("Duplicates removed", f"{upload_summary['duplicates_removed']:,}")
+    metric_c.metric("Rows for review", f"{upload_summary['rows_after_dedupe']:,}")
+    upload_panel.caption(
+        f"Date range: {_format_date(upload_summary['date_min'])} to {_format_date(upload_summary['date_max'])}"
+    )
+
+    gap_count = len(upload_summary["missing_dates"])
+    anomaly_count = len(upload_summary["anomalies"])
+    if gap_count == 0:
+        upload_panel.success("Detect gaps: no missing calendar dates found.")
+    else:
+        upload_panel.warning(f"Detect gaps: {gap_count:,} missing calendar dates found.")
+        with upload_panel.expander("Missing dates"):
+            missing_date_df = pd.DataFrame({
+                "Missing Date": [date.strftime("%d %b %Y") for date in upload_summary["missing_dates"]]
+            })
+            st.dataframe(missing_date_df, use_container_width=True, hide_index=True)
+
+    if anomaly_count == 0:
+        upload_panel.success("Sudden drops/spikes: none detected in daily quantity totals.")
+    else:
+        upload_panel.warning(f"Sudden drops/spikes: {anomaly_count:,} daily movement(s) detected.")
+        with upload_panel.expander("Sudden drops/spikes"):
+            st.dataframe(pd.DataFrame(upload_summary["anomalies"]), use_container_width=True, hide_index=True)
+
+    retraining_strategy = upload_panel.radio(
+        "Retraining strategy",
+        ["Full retrain (simple)", "Rolling window (last 2-3 years)"],
+        horizontal=True,
+        help="Full retrain uses the cleaned uploaded file. Rolling window trains only on the latest three years from the upload date range."
+    )
+    training_df, cutoff_date = apply_retraining_strategy(upload_summary, retraining_strategy)
+    if cutoff_date is not None:
+        upload_panel.caption(
+            f"Rolling window selected: training will use {len(training_df):,} rows from {_format_date(cutoff_date)} onward."
+        )
+    else:
+        upload_panel.caption(f"Full retrain selected: training will use {len(training_df):,} cleaned rows.")
 
     if upload_panel.button("Train Model", type="primary"):
         os.makedirs(TRAINING_UPLOAD_DIR, exist_ok=True)
@@ -220,8 +700,7 @@ def render_training_workspace():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         upload_path = os.path.join(TRAINING_UPLOAD_DIR, f"sales_data_{timestamp}.xlsx")
 
-        with open(upload_path, "wb") as output_file:
-            output_file.write(uploaded_file.getbuffer())
+        training_df.to_excel(upload_path, index=False, engine='openpyxl')
 
         training_logs = []
 
@@ -274,12 +753,23 @@ def render_training_workspace():
                     st.text("\n".join(training_logs))
 
 
-workspace = render_workspace_selector()
+current_user = require_login()
+workspace = render_workspace_selector(current_user)
 if not genai_available:
     st.sidebar.caption("AI insights are disabled until the GenAI layer is implemented.")
 
 if workspace == "Model Training":
+    if current_user["role"] != "Admin":
+        st.error("Only Admin users can access model training.")
+        st.stop()
     render_training_workspace()
+    st.stop()
+
+if workspace == "User Management":
+    if current_user["role"] != "Admin":
+        st.error("Only Admin users can access user management.")
+        st.stop()
+    render_user_management()
     st.stop()
 
 # --- ASSET LOADING ---
@@ -330,7 +820,7 @@ st.sidebar.markdown('<div class="section-kicker">Prediction Controls</div>', uns
 DATA_PATH = 'data/sales_data.xlsx'
 
 if os.path.exists(DATA_PATH):
-    @st.cache_data
+    @st.cache_data(show_spinner=False)
     def get_meta(path):
         """Loads necessary columns for historical trending and AutoML grounding."""
         base_cols = ['RegionName', 'StoreName', 'ProductName', 'BillDate', 'Quantity']
@@ -574,8 +1064,7 @@ if st.session_state.report_generated:
             # TAB 2: FORECAST & STRATEGY
             with tab2:
                 avg_daily = total_qty / horizon
-                sigma = np.std(preds) if len(preds) > 1 else (total_qty * 0.15)
-                safety_stock = round(1.65 * sigma * np.sqrt(lead_time))
+                safety_stock, sigma = calculate_safety_stock(full_hist, preds, horizon, lead_time)
                 reorder_point = round((avg_daily * lead_time) + safety_stock)
                 final_proc = int(round(total_qty * (1 + (growth_margin/100))))
 
