@@ -290,7 +290,7 @@ def require_login():
             st.title("iPlanet Demand Planner")
             st.caption("Sign in to access forecasting and operations workspaces.")
 
-            with st.form("login_form"):
+            with st.form("login_form", enter_to_submit=False):
                 username = st.text_input("User", width=280)
                 password = st.text_input("Password", type="password", width=280)
                 submitted = st.form_submit_button("Sign In", type="primary")
