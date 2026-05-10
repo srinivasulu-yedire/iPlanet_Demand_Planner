@@ -45,7 +45,12 @@ except ImportError:
     genai_import_error = "GenAI layer not available. AI insights will be limited."
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="iPlanet Demand Planner | Bangalore", layout="wide", page_icon="🍎")
+st.set_page_config(
+    page_title="iPlanet Demand Planner | Bangalore",
+    layout="wide",
+    page_icon="🍎",
+    initial_sidebar_state="expanded"
+)
 
 # --- APP SHELL STYLING ---
 st.markdown(
@@ -53,6 +58,9 @@ st.markdown(
     <style>
     section[data-testid="stSidebar"] .block-container {
         padding-top: 1.5rem;
+    }
+    [data-testid="stSidebarCollapseButton"] {
+        display: none;
     }
     [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer {
         visibility: hidden;
